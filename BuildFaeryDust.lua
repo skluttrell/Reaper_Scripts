@@ -287,34 +287,23 @@ local function set_fraction(track, fx, name, frac)
   return set_shown(track, fx, name, target)
 end
 
--- Points ReaGate's detector at the auxiliary input (track channels 3 and 4). The
--- choices are stepped through and their display texts collected. A text naming an
--- auxiliary pair wins outright; failing that, the second of six choices is taken,
--- which is Auxiliary Inputs in ReaGate's list (Main Inputs, Auxiliary Inputs, Main
--- Input Channel L, Main Input Channel R, Auxiliary Input Channel L, Auxiliary Input
--- Channel R, as read from the plugin's own dropdown). Returns the display text,
--- whether it was confirmed by name, and the list of distinct choices seen, for the log.
+-- Points ReaGate's detector at the auxiliary input (track channels 3 and 4).
+-- ReaGate's detector parameter, named SignIn, is a code on a 0 to 1084 scale rather
+-- than a six-way choice, and the API reads and writes that scale as is. The code for
+-- Auxiliary Inputs was read from a project where it had been set by hand. Returns
+-- the display text and whether the plugin reads back that code.
+local DETECTOR_AUX = 2
 local function set_detector_aux(track, fx)
-  if fx < 0 then return nil, false, {} end
+  if fx < 0 then return nil, false end
   local p = find_param(track, fx, "SignIn") or find_param(track, fx, "Detector")
-  if not p then return nil, false, {} end
-  local choices, positions = {}, {}
-  for k = 0, 64 do
-    reaper.TrackFX_SetParamNormalized(track, fx, p, k / 64)
-    local _, text = shown(track, fx, p)
-    if choices[#choices] ~= text then
-      choices[#choices + 1] = text
-      positions[#positions + 1] = k / 64
-    end
-    local l = text:lower()
-    if l:find("aux", 1, true) and l:find("+", 1, true) then return text, true, choices end
+  if not p then return nil, false end
+  reaper.TrackFX_SetParam(track, fx, p, DETECTOR_AUX)
+  local n, text = shown(track, fx, p)
+  if n ~= DETECTOR_AUX then
+    reaper.TrackFX_SetParamNormalized(track, fx, p, DETECTOR_AUX / 1084)   -- in case the API wants it normalized
+    n, text = shown(track, fx, p)
   end
-  if #choices == 6 then
-    reaper.TrackFX_SetParamNormalized(track, fx, p, positions[2])
-    return choices[2], true, choices
-  end
-  reaper.TrackFX_SetParamNormalized(track, fx, p, 0.2)
-  return nil, false, choices
+  return text, n == DETECTOR_AUX
 end
 
 -- Every parameter of an effect as "name = display", for the log.
@@ -410,7 +399,7 @@ for i, hz in ipairs(s.FREQS) do
   set_shown(tone, tgate, "Hold", 0)
   local t_rel = set_shown(tone, tgate, "Release", s.TONEREL_MS)
   set_shown(tone, tgate, "Hysteresis", 0)
-  local det, det_confirmed, det_choices = set_detector_aux(tone, tgate)
+  local det, det_confirmed = set_detector_aux(tone, tgate)
   if not det_confirmed then detector_ok = false end
 
   local send = reaper.CreateTrackSend(noise, tone)
@@ -436,9 +425,8 @@ for i, hz in ipairs(s.FREQS) do
     gate_report[#gate_report + 1] = ("Noise gate: threshold %s (%.1f dB below the noise peak), attack %s, hold %s, release %s")
       :format(n_thr or "?", s.TRIGGER_BELOW, n_att or "?", n_hold or "?", n_rel or "?")
     gate_report[#gate_report + 1] = ("Tone gate: threshold %s, release %s, detector %s%s")
-      :format(t_thr or "?", t_rel or "?", det or "not recognised",
-        det_confirmed and " (Auxiliary Inputs, the second of six choices)" or " (choices not recognised, check it by hand)")
-    gate_report[#gate_report + 1] = "Detector choices seen: " .. table.concat(det_choices, " | ")
+      :format(t_thr or "?", t_rel or "?", det or "not set",
+        det_confirmed and " (Auxiliary Inputs, code 2, read back)" or " (did not read back as code 2, check it by hand)")
     gate_report[#gate_report + 1] = "Tone gate parameters: " .. dump_params(tone, tgate)
   end
   pairs_built = pairs_built + 1
